@@ -37,11 +37,22 @@ LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / f"debug_{datetime.now().strftime('%Y%m%d')}.log"
 
+
+class SafeFileHandler(logging.FileHandler):
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            # 处理编码错误，移除问题字符
+            record.msg = record.msg.encode('utf-8', errors='replace').decode('utf-8')
+            super().emit(record)
+
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s | %(levelname)s | %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        SafeFileHandler(LOG_FILE, encoding='utf-8'),
     ]
 )
 logger = logging.getLogger(__name__)
@@ -255,7 +266,11 @@ def agent_loop(messages: list):
     loop_count = 0
     while True:
         loop_count += 1
-        logger.info(f"[LLM Call #{loop_count}] Input messages: {json.dumps(messages[-3:], ensure_ascii=False, default=str)}")
+        try:
+            msg_json = json.dumps(messages[-3:], ensure_ascii=False, default=str)
+            logger.info(f"[LLM Call #{loop_count}] Input messages: {msg_json}")
+        except Exception:
+            logger.info(f"[LLM Call #{loop_count}] Input messages: (encoding error)")
 
         response = client.messages.create(
             model=MODEL,
@@ -266,7 +281,11 @@ def agent_loop(messages: list):
         )
 
         logger.info(f"[LLM Call #{loop_count}] Stop reason: {response.stop_reason}")
-        logger.debug(f"[LLM Call #{loop_count}] Response: {json.dumps([b.model_dump() if hasattr(b, 'model_dump') else str(b) for b in response.content], ensure_ascii=False)[:2000]}")
+        try:
+            resp_json = json.dumps([b.model_dump() if hasattr(b, 'model_dump') else str(b) for b in response.content], ensure_ascii=False)
+            logger.debug(f"[LLM Call #{loop_count}] Response: {resp_json[:2000]}")
+        except Exception:
+            logger.debug(f"[LLM Call #{loop_count}] Response: (encoding error)")
 
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
@@ -274,14 +293,21 @@ def agent_loop(messages: list):
         results = []
         for block in response.content:
             if block.type == "tool_use":
-                logger.info(f"[Tool Call] {block.name} | Input: {json.dumps(block.input, ensure_ascii=False)}")
+                try:
+                    input_json = json.dumps(block.input, ensure_ascii=False)
+                    logger.info(f"[Tool Call] {block.name} | Input: {input_json}")
+                except Exception:
+                    logger.info(f"[Tool Call] {block.name} | Input: (encoding error)")
 
                 handler = TOOL_HANDLERS.get(block.name)
                 output = (
                     handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 )
 
-                logger.info(f"[Tool Result] {block.name} | Output: {output[:500]}")
+                try:
+                    logger.info(f"[Tool Result] {block.name} | Output: {str(output)[:500]}")
+                except Exception:
+                    logger.info(f"[Tool Result] {block.name} | Output: (encoding error)")
 
                 print(f"> {block.name}: {output[:200]}")
                 results.append(

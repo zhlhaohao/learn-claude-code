@@ -37,24 +37,55 @@ NOT a teaching session -- this is the "put it all together" reference.
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from queue import Queue
 
 from anthropic import Anthropic
+from zhipuai import ZhipuAI
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+
+# 配置调试日志
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / f"debug_{datetime.now().strftime('%Y%m%d')}.log"
+
+
+class SafeFileHandler(logging.FileHandler):
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            # 处理编码错误，移除问题字符
+            record.msg = record.msg.encode('utf-8', errors='replace').decode('utf-8')
+            super().emit(record)
+
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    handlers=[
+        SafeFileHandler(LOG_FILE, encoding='utf-8'),
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info("=" * 50 + " Session Started " + "=" * 50)
+
 if os.getenv("ANTHROPIC_BASE_URL"):
     os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
 
 WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
+zhipu_client = ZhipuAI(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL = os.environ["MODEL_ID"]
 
 TEAM_DIR = WORKDIR / ".team"
@@ -117,6 +148,65 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Edited {path}"
     except Exception as e:
         return f"Error: {e}"
+
+
+def run_web_search(query: str) -> str:
+    """使用智谱AI的内置web_search工具搜索网络信息"""
+    try:
+        response = zhipu_client.chat.completions.create(
+            model="glm-4-flash",
+            messages=[{"role": "user", "content": query}],
+            tools=[
+                {
+                    "type": "web_search",
+                    "web_search": {
+                        "enable": "True",
+                        "search_engine": "search_pro",
+                        "search_result": "True",
+                        "count": "5",
+                        "search_recency_filter": "noLimit",
+                        "content_size": "high",
+                    },
+                }
+            ],
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_weather(cities: list, date: str) -> str:
+    """查询多个城市天气，返回纯净的JSON格式"""
+    city_str = "、".join(cities) if isinstance(cities, list) else cities
+    query = f"{city_str}{date}天气"
+
+    try:
+        response = zhipu_client.chat.completions.create(
+            model="glm-4-flash",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""搜索"{query}"，然后仅返回以下JSON数组格式，不要任何其他文字：
+[{{"city": "城市名", "date": "日期", "weather": "天气状况", "temp_high": "最高温度", "temp_low": "最低温度", "humidity": "湿度", "wind": "风向风力"}}]"""
+                }
+            ],
+            tools=[
+                {
+                    "type": "web_search",
+                    "web_search": {
+                        "enable": "True",
+                        "search_engine": "search_pro",
+                        "search_result": "True",
+                        "count": "5",
+                        "search_recency_filter": "oneDay",
+                        "content_size": "high",
+                    },
+                }
+            ],
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f'{{"error": "{e}"}}'
 
 
 # === SECTION: todos (s03) ===
@@ -580,6 +670,8 @@ TOOL_HANDLERS = {
     "read_file":        lambda **kw: run_read(kw["path"], kw.get("limit")),
     "write_file":       lambda **kw: run_write(kw["path"], kw["content"]),
     "edit_file":        lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
+    "web_search":       lambda **kw: run_web_search(kw["query"]),
+    "weather":          lambda **kw: run_weather(kw["cities"], kw["date"]),
     "TodoWrite":        lambda **kw: TODO.update(kw["items"]),
     "task":             lambda **kw: run_subagent(kw["prompt"], kw.get("agent_type", "Explore")),
     "load_skill":       lambda **kw: SKILLS.load(kw["name"]),
@@ -610,6 +702,10 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
     {"name": "edit_file", "description": "Replace exact text in file.",
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
+    {"name": "web_search", "description": "Search the web for real-time information.",
+     "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}}, "required": ["query"]}},
+    {"name": "weather", "description": "Query weather for multiple cities. Returns JSON array format.",
+     "input_schema": {"type": "object", "properties": {"cities": {"type": "array", "items": {"type": "string"}, "description": "List of city names"}, "date": {"type": "string", "description": "Date (e.g. '今天', '明天', '2024-03-20')"}}, "required": ["cities", "date"]}},
     {"name": "TodoWrite", "description": "Update task tracking list.",
      "input_schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "object", "properties": {"content": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}, "activeForm": {"type": "string"}}, "required": ["content", "status", "activeForm"]}}}, "required": ["items"]}},
     {"name": "task", "description": "Spawn a subagent for isolated exploration or work.",
@@ -654,7 +750,14 @@ TOOLS = [
 # === SECTION: agent_loop ===
 def agent_loop(messages: list):
     rounds_without_todo = 0
+    loop_count = 0
     while True:
+        loop_count += 1
+        try:
+            msg_json = json.dumps(messages[-3:], ensure_ascii=False, default=str)
+            logger.info(f"[LLM Call #{loop_count}] Input messages: {msg_json}")
+        except Exception:
+            logger.info(f"[LLM Call #{loop_count}] Input messages: (encoding error)")
         # s06: compression pipeline
         microcompact(messages)
         if estimate_tokens(messages) > TOKEN_THRESHOLD:
@@ -676,6 +779,14 @@ def agent_loop(messages: list):
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
         )
+
+        logger.info(f"[LLM Call #{loop_count}] Stop reason: {response.stop_reason}")
+        try:
+            resp_json = json.dumps([b.model_dump() if hasattr(b, 'model_dump') else str(b) for b in response.content], ensure_ascii=False)
+            logger.debug(f"[LLM Call #{loop_count}] Response: {resp_json[:2000]}")
+        except Exception:
+            logger.debug(f"[LLM Call #{loop_count}] Response: (encoding error)")
+
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
             return
@@ -685,6 +796,12 @@ def agent_loop(messages: list):
         manual_compress = False
         for block in response.content:
             if block.type == "tool_use":
+                try:
+                    input_json = json.dumps(block.input, ensure_ascii=False)
+                    logger.info(f"[Tool Call] {block.name} | Input: {input_json}")
+                except Exception:
+                    logger.info(f"[Tool Call] {block.name} | Input: (encoding error)")
+            if block.type == "tool_use":
                 if block.name == "compress":
                     manual_compress = True
                 handler = TOOL_HANDLERS.get(block.name)
@@ -692,6 +809,13 @@ def agent_loop(messages: list):
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
+
+                try:
+                    output_str = str(output)
+                    logger.info(f"[Tool Result] {block.name} | Output: {output_str[:500]}")
+                except Exception:
+                    logger.info(f"[Tool Result] {block.name} | Output: (encoding error)")
+
                 print(f"> {block.name}: {str(output)[:200]}")
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
                 if block.name == "TodoWrite":

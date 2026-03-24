@@ -1,0 +1,1 @@
+[{"city": "广州", "date": "2026-03-24", "weather": "多云间晴，早晚有轻雾", "temp_high": "29", "temp_low": "20", "humidity": "80%", "wind": "东南风1-2级"}]

@@ -98,5 +98,7 @@ def validate_config(config: Dict[str, Any]) -> bool:
         ValueError: 如果缺少必需的配置
     """
     if not config.get("model_id"):
-        raise ValueError("MODEL_ID 是必需的。请在 .env 文件或环境变量中设置。")
+        raise ValueError("MODEL_ID is required. Set it in .env file or environment.")
+    if not config.get("anthropic_api_key"):
+        raise ValueError("ANTHROPIC_API_KEY is required. Set it in .env file or environment.")
     return True

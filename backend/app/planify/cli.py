@@ -20,13 +20,25 @@ from pathlib import Path
 # 编码模块必须在其他任何导入之前导入
 from core import setup_encoding, apply_safe_stdio
 
+# ============================================================================
+# ANSI 颜色代码
+# ============================================================================
+class Colors:
+    """终端输出颜色"""
+    USER = '\033[36m'      # 青色 - 用户输入
+    TOOL_CALL = '\033[33m' # 黄色 - 工具调用
+    TOOL_RESULT = '\033[32m'  # 绿色 - 工具返回结果
+    ASSISTANT = '\033[94m'    # 浅蓝色 - LLM 回答
+    RESET = '\033[0m'     # 重置颜色
+    BOLD = '\033[1m'      # 粗体
+
 # 应用编码设置
 setup_encoding()
 apply_safe_stdio()
 
 # 重新配置日志（CLI 模式输出到控制台）
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.WARNING,  # 只显示 WARNING 及以上级别的日志
     format='%(asctime)s | %(levelname)s | %(message)s',
     handlers=[]
 )
@@ -102,7 +114,8 @@ def setup_single_user_session():
     # 初始化日志
     logger = setup_logging(
         log_dir=logs_dir,
-        console_output=True  # CLI 模式输出到控制台
+        console_output=True,  # CLI 模式输出到控制台
+        console_level=logging.WARNING,  # 控制台只显示 WARNING 及以上
     )
     logger.info("=" * 50 + " CLI Mode Started " + "=" * 50)
 
@@ -257,8 +270,27 @@ def main():
                 continue
 
             # 正常对话
+            # 显示用户输入
+            print(f"\n{Colors.USER}{Colors.BOLD}You:{Colors.RESET} {Colors.USER}{query}{Colors.RESET}\n")
+
             history.append({"role": "user", "content": query})
             session.append_message({"role": "user", "content": query})
+
+            def on_tool_call(name: str, args: dict) -> None:
+                args_str = json.dumps(args, ensure_ascii=False, indent=2)
+                # 在 JSON 格式化后，将转义的换行符替换为真实换行，让代码更易读
+                args_str = args_str.replace('\\n', '\n')
+                lines = args_str.split('\n')
+                if len(lines) > 10:
+                    args_str = '\n'.join(lines[:10]) + '\n  ...'
+                print(f"{Colors.TOOL_CALL}{Colors.BOLD}Tool:{Colors.RESET} {Colors.TOOL_CALL}{name}({args_str}){Colors.RESET}\n")
+
+            def on_tool_result(name: str, result: str) -> None:
+                result_str = result
+                lines = result_str.split('\n')
+                if len(lines) > 10:
+                    result_str = '\n'.join(lines[:10]) + '\n  ...'
+                print(f"{Colors.TOOL_RESULT}{result_str}{Colors.RESET}\n")
 
             run_agent_loop(
                 messages=history,
@@ -273,19 +305,33 @@ def main():
                 config=session.config.__dict__,
                 logger=session.logger,
                 session=session,
+                tool_callback=on_tool_call,
+                tool_result_callback=on_tool_result,
             )
 
-            # 打印最终回答
+            # 打印最终回答（只打印自然语言，跳过 tool_use）
             if history and len(history) >= 2:
                 last_msg = history[-1]
                 if last_msg.get("role") == "assistant":
                     content = last_msg.get("content")
                     if isinstance(content, list):
+                        text_parts = []
                         for block in content:
-                            if hasattr(block, "text"):
-                                print(block.text)
-                    else:
-                        print(content)
+                            if hasattr(block, "text") and block.text:
+                                text_parts.append(block.text)
+                        if text_parts:
+                            full_text = ''.join(text_parts)
+                            lines = full_text.split('\n')
+                            if len(lines) > 10:
+                                full_text = '\n'.join(lines[:10]) + '\n  ...'
+                            print(f"{Colors.ASSISTANT}{Colors.BOLD}Assistant:{Colors.RESET}")
+                            print(f"{Colors.ASSISTANT}{full_text}{Colors.RESET}")
+                    elif isinstance(content, str) and content:
+                        lines = content.split('\n')
+                        if len(lines) > 10:
+                            content = '\n'.join(lines[:10]) + '\n  ...'
+                        print(f"{Colors.ASSISTANT}{Colors.BOLD}Assistant:{Colors.RESET}")
+                        print(f"{Colors.ASSISTANT}{content}{Colors.RESET}")
             print()
 
     except Exception as e:

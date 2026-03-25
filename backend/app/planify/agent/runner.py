@@ -41,6 +41,8 @@ class Agent:
         config: Dict[str, Any],
         logger: Any,
         session: Optional[Any] = None,
+        tool_callback: Optional[callable] = None,
+        tool_result_callback: Optional[callable] = None,
     ):
         """
         初始化代理。
@@ -57,6 +59,8 @@ class Agent:
             config: 配置字典
             logger: 日志记录器
             session: Session 实例（可选）
+            tool_callback: 工具调用回调函数 (name, args) -> None
+            tool_result_callback: 工具结果回调函数 (name, result) -> None
         """
         self.client = client
         self.model = model
@@ -69,6 +73,8 @@ class Agent:
         self.config = config
         self.logger = logger
         self.session = session
+        self.tool_callback = tool_callback
+        self.tool_result_callback = tool_result_callback
         self._system_prompt: Optional[str] = None
 
         # 延迟导入以避免循环依赖（使用绝对导入）
@@ -87,6 +93,11 @@ class Agent:
         if self._system_prompt is None:
             workdir = self.config.get("workdir", ".")
             self._system_prompt = (
+                f"# 工作目录约束\n\n"
+                f"**当前工作目录**: {workdir}\n\n"
+                f"**重要安全约束**: 绝对不要在工作目录以外的地方做任何操作！\n\n"
+                f"所有文件读写、命令执行都必须限定在工作目录内。系统已在工具层面实施了路径安全检查，任何尝试访问工作目录外的操作都会被阻止。\n\n"
+                f"# 任务指南\n\n"
                 f"You are a coding agent at {workdir}. Use tools to solve tasks.\n"
                 "Prefer task_create/task_update/task_list for multi-step work. Use TodoWrite for short checklists.\n"
                 "Use task for subagent delegation. Use load_skill for specialized knowledge.\n"
@@ -183,6 +194,13 @@ class Agent:
 
             for block in response.content:
                 if block.type == "tool_use":
+                    # 触发工具调用回调（用于 CLI 输出）
+                    if self.tool_callback:
+                        try:
+                            self.tool_callback(block.name, block.input)
+                        except Exception:
+                            pass  # 回调失败不应影响主流程
+
                     # 记录工具调用
                     try:
                         input_json = json.dumps(block.input, ensure_ascii=False)
@@ -207,6 +225,13 @@ class Agent:
                         self.logger.info(f"[Tool Result] {block.name} | Output: {output_str[:500]}")
                     except Exception:
                         self.logger.info(f"[Tool Result] {block.name} | Output: (encoding error)")
+
+                    # 触发工具结果回调
+                    if self.tool_result_callback:
+                        try:
+                            self.tool_result_callback(block.name, str(output))
+                        except Exception:
+                            pass  # 回调失败不应影响主流程
 
                     results.append({
                         "type": "tool_result",
@@ -274,6 +299,8 @@ def run_agent_loop(
     config: Dict[str, Any],
     logger: Any,
     session: Optional[Any] = None,
+    tool_callback: Optional[callable] = None,
+    tool_result_callback: Optional[callable] = None,
 ) -> None:
     """
     运行代理循环（函数式接口）。
@@ -293,6 +320,8 @@ def run_agent_loop(
         config: 配置字典
         logger: 日志记录器
         session: Session 实例（可选）
+        tool_callback: 工具调用回调函数 (name, args) -> None
+        tool_result_callback: 工具结果回调函数 (name, result) -> None
     """
     agent = Agent(
         client=client,
@@ -306,5 +335,7 @@ def run_agent_loop(
         config=config,
         logger=logger,
         session=session,
+        tool_callback=tool_callback,
+        tool_result_callback=tool_result_callback,
     )
     agent.run(messages)

@@ -101,6 +101,7 @@ def build_tool_registry(
             }
         },
     ]
+    tools.extend(basic_tools)
     handlers.update(make_basic_tools(workdir))
 
     # 网络工具

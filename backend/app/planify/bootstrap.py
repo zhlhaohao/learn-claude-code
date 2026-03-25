@@ -95,12 +95,12 @@ def create_session(
     session = manager.create_session(user_id, user_config, session_id, **overrides)
     manager.initialize_session_components(session)
 
-    # 设置子代理处理器
+    # 设置子代理处理器（使用会话隔离的工作目录）
     from ..tools import registry
     session.tool_handlers["task"] = lambda **kw: registry._handle_task(
         kw["prompt"],
         kw.get("agent_type", "Explore"),
-        session.config.workdir,
+        session.config.session_workdir,
         session.client,
         session.model,
         session.tool_handlers,

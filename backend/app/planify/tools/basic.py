@@ -60,12 +60,21 @@ def run_bash(command: str, workdir: Path) -> str:
     try:
         r = subprocess.run(
             command, shell=True, cwd=workdir,
-            capture_output=True, text=True, timeout=120
+            capture_output=True, timeout=120
         )
-        out = (r.stdout + r.stderr).strip()[:50000]
+        # 确保输出使用 UTF-8 解码，失败时替换不可编码字符
+        try:
+            out = (r.stdout.decode('utf-8', errors='replace') +
+                   r.stderr.decode('utf-8', errors='replace')).strip()[:50000]
+        except UnicodeDecodeError:
+            # 如果解码失败，尝试使用系统默认编码
+            out = (r.stdout.decode('utf-8', errors='replace') +
+                   r.stderr.decode('utf-8', errors='replace')).strip()[:50000]
         return out if out else "(no output)"
     except subprocess.TimeoutExpired:
         return "Error: Timeout (120s)"
+    except Exception as e:
+        return f"Error: {str(e).encode('utf-8', errors='replace').decode('utf-8')}"
 
 
 def run_read(path: str, workdir: Path, limit: int = None) -> str:
@@ -81,12 +90,16 @@ def run_read(path: str, workdir: Path, limit: int = None) -> str:
         文件内容（可能被截断）
     """
     try:
-        lines = safe_path(path, workdir).read_text().splitlines()
+        # 显式指定 UTF-8 编码，遇到错误时替换
+        file_path = safe_path(path, workdir)
+        content = file_path.read_text(encoding='utf-8', errors='replace')
+        lines = content.splitlines()
         if limit and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more)"]
         return "\n".join(lines)[:50000]
     except Exception as e:
-        return f"Error: {e}"
+        error_msg = f"Error: {e}".encode('utf-8', errors='replace').decode('utf-8')
+        return error_msg
 
 
 def run_write(path: str, content: str, workdir: Path) -> str:
@@ -106,10 +119,14 @@ def run_write(path: str, content: str, workdir: Path) -> str:
     try:
         fp = safe_path(path, workdir)
         fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content)
+        # 确保内容是字符串，使用 UTF-8 编码
+        if isinstance(content, bytes):
+            content = content.decode('utf-8', errors='replace')
+        fp.write_text(content, encoding='utf-8')
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
-        return f"Error: {e}"
+        error_msg = f"Error: {e}".encode('utf-8', errors='replace').decode('utf-8')
+        return error_msg
 
 
 def run_edit(path: str, old_text: str, new_text: str, workdir: Path) -> str:
@@ -129,13 +146,16 @@ def run_edit(path: str, old_text: str, new_text: str, workdir: Path) -> str:
     """
     try:
         fp = safe_path(path, workdir)
-        c = fp.read_text()
+        # 显式指定 UTF-8 编码读取
+        c = fp.read_text(encoding='utf-8', errors='replace')
         if old_text not in c:
             return f"Error: Text not found in {path}"
-        fp.write_text(c.replace(old_text, new_text, 1))
+        # 显式指定 UTF-8 编码写入
+        fp.write_text(c.replace(old_text, new_text, 1), encoding='utf-8')
         return f"Edited {path}"
     except Exception as e:
-        return f"Error: {e}"
+        error_msg = f"Error: {e}".encode('utf-8', errors='replace').decode('utf-8')
+        return error_msg
 
 
 def make_basic_tools(workdir: Path) -> dict:

@@ -66,6 +66,10 @@ class TestSessionConfig:
             assert config.skills_dir == expected_skills
             assert config.logs_dir == expected_logs
 
+            # 测试会话工作目录隔离
+            expected_session_workdir = workdir / ".sessions/alice/sess_001"
+            assert config.session_workdir == expected_session_workdir
+
 
 class TestSession:
     """Session 测试"""

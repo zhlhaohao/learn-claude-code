@@ -81,6 +81,7 @@ def setup_logging(
     log_dir: Optional[Path] = None,
     log_level: int = logging.DEBUG,
     console_output: bool = False,
+    console_level: int = logging.INFO,
     include_session: bool = True,
 ) -> logging.Logger:
     """
@@ -90,6 +91,7 @@ def setup_logging(
         log_dir: 日志文件目录（默认为脚本目录下的 logs/）
         log_level: 日志级别（默认为 DEBUG）
         console_output: 是否输出到控制台（默认为 False）
+        console_level: 控制台日志级别（默认为 INFO）
         include_session: 是否在日志中包含会话信息（默认为 True）
 
     Returns:
@@ -119,7 +121,7 @@ def setup_logging(
     # 仅在显式要求时添加控制台处理器
     if console_output and hasattr(sys, 'stdout'):
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)  # 控制台只显示 INFO 级别以上
+        console_handler.setLevel(console_level)  # 控制台只显示指定级别以上
         console_handler.setFormatter(formatter)
         handlers.append(console_handler)
 

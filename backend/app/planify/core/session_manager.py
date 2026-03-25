@@ -206,17 +206,20 @@ class SessionManager:
         # 初始化管理器
         session.todo_mgr = TodoManager()
         session.task_mgr = TaskManager(session.config.tasks_dir)
-        session.bg_mgr = BackgroundManager(session.config.workdir)
+        # 使用会话隔离的工作目录
+        session.bg_mgr = BackgroundManager(session.config.session_workdir)
         session.bus = MessageBus(session.config.inbox_dir)
         session.skills = SkillLoader(session.config.skills_dir)
 
         # 初始化队友管理器
-        basic_tools = make_basic_tools(session.config.workdir)
+        # 使用会话隔离的工作目录
+        basic_tools = make_basic_tools(session.config.session_workdir)
         session.team = TeammateManager(
             bus=session.bus,
             task_mgr=session.task_mgr,
             team_dir=session.config.team_dir,
-            workdir=session.config.workdir,
+            # 使用会话隔离的工作目录
+            workdir=session.config.session_workdir,
             model=session.model,
             client=session.client,
             poll_interval=session.poll_interval,
@@ -228,8 +231,9 @@ class SessionManager:
         )
 
         # 构建工具注册表
+        # 使用会话隔离的工作目录
         session.tools, session.tool_handlers = build_tool_registry(
-            workdir=session.config.workdir,
+            workdir=session.config.session_workdir,
             zhipu_client=session.zhipu_client,
             todo_mgr=session.todo_mgr,
             task_mgr=session.task_mgr,

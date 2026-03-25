@@ -108,6 +108,15 @@ def run_subagent(
     }
 
     # 子代理消息循环
+    workdir_str = str(workdir)
+    system_prompt = (
+        f"# 工作目录约束\n\n"
+        f"**当前工作目录**: {workdir_str}\n\n"
+        f"**重要安全约束**: 绝对不要在工作目录以外的地方做任何操作！\n\n"
+        f"所有文件读写、命令执行都必须限定在工作目录内。系统已在工具层面实施了路径安全检查，任何尝试访问工作目录外的操作都会被阻止。\n\n"
+        f"# 子代理任务\n\n"
+        f"你是一个临时子代理，专注于完成指定的探索或工作任务。任务完成后返回摘要。"
+    )
     sub_msgs = [{"role": "user", "content": prompt}]
 
     # 子代理主循环（最多 30 轮）
@@ -117,6 +126,7 @@ def run_subagent(
         try:
             resp = client.messages.create(
                 model=model,
+                system=system_prompt,
                 messages=sub_msgs,
                 tools=sub_tools,
                 max_tokens=8000

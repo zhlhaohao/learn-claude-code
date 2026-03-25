@@ -63,6 +63,19 @@ class SessionConfig:
         """获取日志目录"""
         return self.workdir / "logs"
 
+    @property
+    def session_workdir(self) -> Path:
+        """
+        获取会话专用工作目录（会话间隔离）。
+
+        基础工具（bash、read_file、write_file、edit_file）在此目录中操作，
+        确保不同会话之间的文件操作互不干扰。
+
+        Returns:
+            会话隔离目录路径
+        """
+        return self.workdir / f".sessions/{self.user_id}/{self.session_id}"
+
 
 @dataclass
 class Session:
@@ -169,10 +182,17 @@ class Session:
         """获取会话 ID"""
         return self.config.session_id
 
+    @property
+    def session_workdir(self) -> Path:
+        """获取会话专用工作目录（会话间隔离）"""
+        return self.config.session_workdir
+
     def ensure_dirs(self) -> None:
         """
         确保所有必需的目录存在。
         """
+        # 创建会话隔离的工作目录
+        self.config.session_workdir.mkdir(parents=True, exist_ok=True)
         self.config.team_dir.mkdir(parents=True, exist_ok=True)
         self.config.tasks_dir.mkdir(parents=True, exist_ok=True)
         self.config.transcript_dir.mkdir(parents=True, exist_ok=True)

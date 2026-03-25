@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(mkdir:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(bash:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

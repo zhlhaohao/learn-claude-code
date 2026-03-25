@@ -22,7 +22,7 @@ from typing import Dict, List
 
 
 class BackgroundManager:
-    """后台任务管理器"""
+    """后台任务管理器（线程安全）"""
 
     def __init__(self, workdir: Path):
         """
@@ -32,8 +32,9 @@ class BackgroundManager:
             workdir: 命令执行的工作目录
         """
         self.workdir = workdir
+        self._tasks_lock = threading.RLock()
         self.tasks: Dict[str, Dict[str, str]] = {}  # task_id -> {status, command, result}
-        self.notifications: Queue = Queue()  # 完成通知队列
+        self.notifications: Queue = Queue()  # 完成通知队列（Queue 本身是线程安全的）
 
     def run(self, command: str, timeout: int = 120) -> str:
         """
@@ -47,7 +48,8 @@ class BackgroundManager:
             启动确认信息，包含任务 ID
         """
         tid = str(uuid.uuid4())[:8]
-        self.tasks[tid] = {"status": "running", "command": command, "result": None}
+        with self._tasks_lock:
+            self.tasks[tid] = {"status": "running", "command": command, "result": None}
         threading.Thread(target=self._exec, args=(tid, command, timeout), daemon=True).start()
         return f"Background task {tid} started: {command[:80]}"
 
@@ -66,14 +68,18 @@ class BackgroundManager:
                 capture_output=True, text=True, timeout=timeout
             )
             output = (r.stdout + r.stderr).strip()[:50000]
-            self.tasks[tid].update({"status": "completed", "result": output or "(no output)"})
+            with self._tasks_lock:
+                if tid in self.tasks:
+                    self.tasks[tid].update({"status": "completed", "result": output or "(no output)"})
         except Exception as e:
-            self.tasks[tid].update({"status": "error", "result": str(e)})
+            with self._tasks_lock:
+                if tid in self.tasks:
+                    self.tasks[tid].update({"status": "error", "result": str(e)})
         # 发送完成通知
         self.notifications.put({
             "task_id": tid,
-            "status": self.tasks[tid]["status"],
-            "result": self.tasks[tid]["result"][:500]
+            "status": self.tasks[tid]["status"] if tid in self.tasks else "error",
+            "result": self.tasks[tid]["result"][:500] if tid in self.tasks else "Unknown error"
         })
 
     def check(self, tid: str = None) -> str:
@@ -86,13 +92,14 @@ class BackgroundManager:
         Returns:
             任务状态信息
         """
-        if tid:
-            t = self.tasks.get(tid)
-            return f"[{t['status']}] {t.get('result', '(running)')}" if t else f"Unknown: {tid}"
-        return "\n".join(
-            f"{k}: [{v['status']}] {v['command'][:60]}"
-            for k, v in self.tasks.items()
-        ) or "No bg tasks."
+        with self._tasks_lock:
+            if tid:
+                t = self.tasks.get(tid)
+                return f"[{t['status']}] {t.get('result', '(running)')}" if t else f"Unknown: {tid}"
+            return "\n".join(
+                f"{k}: [{v['status']}] {v['command'][:60]}"
+                for k, v in self.tasks.items()
+            ) or "No bg tasks."
 
     def drain(self) -> List[Dict[str, str]]:
         """
@@ -107,3 +114,42 @@ class BackgroundManager:
         while not self.notifications.empty():
             notifs.append(self.notifications.get_nowait())
         return notifs
+
+    def remove(self, tid: str) -> bool:
+        """
+        移除已完成的任务记录
+
+        Args:
+            tid: 任务 ID
+
+        Returns:
+            是否成功移除
+        """
+        with self._tasks_lock:
+            if tid in self.tasks and self.tasks[tid]["status"] in ("completed", "error"):
+                del self.tasks[tid]
+                return True
+            return False
+
+    def clear(self) -> int:
+        """
+        清除所有已完成的任务记录
+
+        Returns:
+            清除的任务数量
+        """
+        count = 0
+        with self._tasks_lock:
+            to_remove = [
+                tid for tid, task in self.tasks.items()
+                if task["status"] in ("completed", "error")
+            ]
+            for tid in to_remove:
+                del self.tasks[tid]
+                count += 1
+        return count
+
+    def __len__(self) -> int:
+        """返回活跃任务数量"""
+        with self._tasks_lock:
+            return len(self.tasks)

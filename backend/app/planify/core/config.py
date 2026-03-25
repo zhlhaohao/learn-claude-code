@@ -1,43 +1,56 @@
 """配置管理
 
-提供集中配置，支持环境变量。
+提供集中配置，支持环境变量和用户配置参数。
 
-优先级（最高在前）：
-1. 环境变量（override=True 时）
-2. .env.local（dotenv 自动优先加载）
-3. .env
+配置优先级（最高在前）：
+1. user_config 参数传入
+2. 环境变量
+3. .env.local（dotenv 自动优先加载）
+4. .env
+5. 默认值
 
 注意：.env.local 用于本地开发配置，不应提交到版本控制。
 """
 
 import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
 
-def get_config() -> Dict[str, Any]:
+def get_config(
+    workdir: Optional[Path] = None,
+    user_config: Optional[Dict[str, Any]] = None,
+    load_env: bool = True
+) -> Dict[str, Any]:
     """
     加载并返回应用配置。
 
     配置优先级（最高在前）：
-    1. 环境变量
-    2. .env 文件中的值
-    3. 默认值
+    1. user_config 参数
+    2. 环境变量
+    3. .env 文件中的值
+    4. 默认值
+
+    Args:
+        workdir: 工作目录（默认为当前目录）
+        user_config: 用户配置字典，覆盖其他来源
+        load_env: 是否加载 .env 文件（默认 True）
 
     Returns:
         包含所有设置的配置字典
     """
-    # 加载 .env 文件，覆盖已存在的环境变量
-    load_dotenv(override=True)
+    if workdir is None:
+        workdir = Path.cwd()
+
+    # 加载 .env 文件（仅在 load_env=True 时）
+    if load_env:
+        load_dotenv(override=True)
 
     # 处理自定义 API 端点 - 移除默认的 auth token 以避免冲突
     if os.getenv("ANTHROPIC_BASE_URL"):
         os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
-
-    # 基本路径
-    workdir = Path.cwd()
 
     # 目录路径
     team_dir = workdir / ".team"
@@ -60,7 +73,8 @@ def get_config() -> Dict[str, Any]:
         "plan_approval_response" # 计划审批响应
     }
 
-    return {
+    # 基础配置
+    config = {
         # API 配置
         "model_id": os.environ.get("MODEL_ID"),
         "anthropic_base_url": os.getenv("ANTHROPIC_BASE_URL"),
@@ -82,6 +96,55 @@ def get_config() -> Dict[str, Any]:
         # 消息类型
         "valid_msg_types": valid_msg_types,
     }
+
+    # 应用 user_config 覆盖
+    if user_config:
+        config.update(user_config)
+
+    return config
+
+
+def get_user_config_dict(
+    model_id: Optional[str] = None,
+    anthropic_api_key: Optional[str] = None,
+    anthropic_base_url: Optional[str] = None,
+    token_threshold: Optional[int] = None,
+    poll_interval: Optional[int] = None,
+    idle_timeout: Optional[int] = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    构建用户配置字典。
+
+    Args:
+        model_id: 模型 ID
+        anthropic_api_key: Anthropic API 密钥
+        anthropic_base_url: 自定义 API 端点
+        token_threshold: token 压缩阈值
+        poll_interval: 轮询间隔
+        idle_timeout: 空闲超时
+        **kwargs: 其他配置项
+
+    Returns:
+        用户配置字典
+    """
+    config = {}
+
+    if model_id is not None:
+        config["model_id"] = model_id
+    if anthropic_api_key is not None:
+        config["anthropic_api_key"] = anthropic_api_key
+    if anthropic_base_url is not None:
+        config["anthropic_base_url"] = anthropic_base_url
+    if token_threshold is not None:
+        config["token_threshold"] = token_threshold
+    if poll_interval is not None:
+        config["poll_interval"] = poll_interval
+    if idle_timeout is not None:
+        config["idle_timeout"] = idle_timeout
+
+    config.update(kwargs)
+    return config
 
 
 def validate_config(config: Dict[str, Any]) -> bool:

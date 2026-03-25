@@ -1,15 +1,16 @@
 """工具注册中心
 
 从所有模块构建完整的工具定义和处理器。
+支持多用户多会话架构，使用 Session 上下文。
 """
+
+from typing import Any, Dict, List, Tuple, Optional
 
 from .basic import make_basic_tools
 from .web import make_web_tools
 from .file_tasks import get_file_task_definitions, get_file_task_handlers
 from .team_tools import get_team_tools_definitions, get_team_tools_handlers
 from .protocols import get_protocol_definitions, get_protocol_handlers
-from ..subagent.runner import run_subagent
-from ..context.compact import estimate_tokens, microcompact, auto_compact
 
 
 def build_tool_registry(
@@ -25,7 +26,8 @@ def build_tool_registry(
     model,
     client,
     transcript_dir,
-) -> tuple:
+    session=None,
+) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     从所有模块构建完整的工具注册表
 
@@ -42,12 +44,13 @@ def build_tool_registry(
         model: 模型 ID
         client: Anthropic 客户端
         transcript_dir: 脚本目录
+        session: Session 实例（可选，用于会话上下文）
 
     Returns:
         工具定义和处理器字典的元组
     """
-    tools = []
-    handlers = {}
+    tools: List[Dict] = []
+    handlers: Dict[str, Any] = {}
 
     # 有效的消息类型集合（用于团队通信）
     valid_msg_types = ["message", "broadcast", "shutdown_request", "shutdown_response", "plan_approval_response"]
@@ -156,18 +159,22 @@ def build_tool_registry(
             }
         },
     ]
+
+    # 创建带 Session 支持的工具处理器
     handlers.update({
         "TodoWrite": lambda **kw: todo_mgr.update(kw["items"]),
-        "task": lambda **kw: run_subagent(
+        "task": lambda **kw: _handle_task(
             kw["prompt"],
             kw.get("agent_type", "Explore"),
             workdir,
             client,
             model,
-            **handlers
+            handlers,
+            session
         ),
         "load_skill": lambda **kw: skills_loader.load(kw["name"]),
     })
+    tools.extend(todo_subagent_tools)
 
     # 文件任务系统工具
     task_definitions = get_file_task_definitions()
@@ -227,3 +234,46 @@ def build_tool_registry(
     handlers.update({"compress": lambda **kw: "压缩中..."})
 
     return tools, handlers
+
+
+def _handle_task(
+    prompt: str,
+    agent_type: str,
+    workdir,
+    client,
+    model,
+    handlers: Dict[str, Any],
+    session: Optional[Any] = None,
+) -> str:
+    """
+    处理 task 工具调用（带 Session 支持）
+
+    Args:
+        prompt: 子代理提示
+        agent_type: 代理类型
+        workdir: 工作目录
+        client: Anthropic 客户端
+        model: 模型 ID
+        handlers: 工具处理器字典
+        session: Session 实例（可选）
+
+    Returns:
+        执行结果
+    """
+    from ..subagent.runner import run_subagent
+
+    # 如果提供了 session，传递子代理的 workdir 配置
+    subagent_workdir = workdir
+    if session is not None:
+        # 子代理可以在会话的隔离目录中工作
+        # 这里使用相同的工作目录，但可以配置为独立的临时目录
+        pass
+
+    return run_subagent(
+        prompt,
+        agent_type,
+        subagent_workdir,
+        client,
+        model,
+        **handlers
+    )

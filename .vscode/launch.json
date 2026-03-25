@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Planify CLI",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/app/planify/cli.py",
+      "cwd": "${workspaceFolder}/mywork",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}

@@ -1,244 +1,237 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-应用初始化模块
+应用初始化模块（多用户多会话架构）
 
-负责初始化所有系统组件并管理全局应用状态。
+负责初始化 SessionManager 并提供会话管理接口。
+不再使用全局单例模式，支持多用户并发访问。
 """
 
-from typing import Any, Dict, List, Tuple, Optional
+from pathlib import Path
+from typing import Optional
 
-# 核心导入
-from .core import get_config, setup_logging, init_clients
-
-# 管理器导入
-from .managers import TodoManager, TaskManager, BackgroundManager, TeammateManager
-
-# 消息传递导入
-from .messaging import MessageBus
-
-# 技能导入
-from .skills import SkillLoader
-
-# 工具导入
-from .tools import build_tool_registry
-from .tools.basic import make_basic_tools, run_bash, run_read, run_write, run_edit
-
-# 子代理导入
-from .subagent import run_subagent
+from .core import SessionManager
+from .subagent.runner import run_subagent
 
 
-class AppState:
+# SessionManager 单例（通过 get_instance() 访问）
+_manager: Optional[SessionManager] = None
+
+
+def get_manager() -> SessionManager:
     """
-    应用状态容器。
-
-    存储所有全局应用组件，提供统一的访问接口。
-    """
-
-    def __init__(self):
-        """初始化空状态。"""
-        self.config: Optional[Dict] = None
-        self.logger: Optional[Any] = None
-        self.client: Optional[Any] = None
-        self.zhipu_client: Optional[Any] = None
-        self.todo_mgr: Optional[TodoManager] = None
-        self.task_mgr: Optional[TaskManager] = None
-        self.bg_mgr: Optional[BackgroundManager] = None
-        self.bus: Optional[MessageBus] = None
-        self.team: Optional[TeammateManager] = None
-        self.skills: Optional[SkillLoader] = None
-        self.tools: Optional[List[Dict]] = None
-        self.tool_handlers: Optional[Dict[str, callable]] = None
-
-    @property
-    def workdir(self) -> Any:
-        """获取工作目录。"""
-        return self.config["workdir"] if self.config else None
-
-    @property
-    def model(self) -> Any:
-        """获取模型名称。"""
-        return self.config["model_id"] if self.config else None
-
-    @property
-    def token_threshold(self) -> Any:
-        """获取 token 阈值。"""
-        return self.config["token_threshold"] if self.config else None
-
-
-# 全局应用状态实例
-_state: Optional[AppState] = None
-
-
-def get_state() -> AppState:
-    """
-    获取全局应用状态实例。
+    获取 SessionManager 单例实例。
 
     Returns:
-        AppState 实例
+        SessionManager 实例
 
     Raises:
         RuntimeError: 如果应用尚未初始化
     """
-    if _state is None:
+    global _manager
+    if _manager is None:
         raise RuntimeError("应用尚未初始化。请先调用 initialize()。")
-    return _state
+    return _manager
 
 
-def initialize() -> AppState:
+def initialize(base_workdir: Optional[Path] = None) -> SessionManager:
     """
-    初始化所有系统组件。
+    初始化应用并返回 SessionManager 单例。
 
-    此函数设置：
-    1. 配置
-    2. 日志
-    3. API 客户端
-    4. 管理器（Todo, Task, Background, Teammate）
-    5. 消息总线
-    6. 技能加载器
-    7. 工具注册表
-
-    Returns:
-        AppState 实例
-    """
-    global _state
-
-    if _state is not None:
-        return _state
-
-    state = AppState()
-
-    # 1. 配置
-    state.config = get_config()
-    _validate_config(state.config)
-
-    # 2. 日志（不输出到控制台，只记录到文件）
-    state.logger = setup_logging(console_output=False)
-
-    # 3. API 客户端
-    state.client, state.zhipu_client = init_clients(
-        state.config["anthropic_base_url"],
-        state.config["anthropic_api_key"]
-    )
-
-    # 4. 管理器
-    state.todo_mgr = TodoManager()
-    state.task_mgr = TaskManager(state.config["tasks_dir"])
-    state.bg_mgr = BackgroundManager(state.workdir)
-
-    # 5. 消息总线
-    state.bus = MessageBus(state.config["inbox_dir"])
-
-    # 6. 技能加载器
-    state.skills = SkillLoader(state.config["skills_dir"])
-
-    # 7. 队友管理器（复杂，需要多个依赖）
-    basic_tools = make_basic_tools(state.workdir)
-    state.team = TeammateManager(
-        bus=state.bus,
-        task_mgr=state.task_mgr,
-        team_dir=state.config["team_dir"],
-        workdir=state.workdir,
-        model=state.model,
-        client=state.client,
-        poll_interval=state.config["poll_interval"],
-        idle_timeout=state.config["idle_timeout"],
-        run_bash=run_bash,
-        run_read=run_read,
-        run_write=run_write,
-        run_edit=run_edit,
-    )
-
-    # 8. 工具注册表
-    state.tools, state.tool_handlers = build_tool_registry(
-        workdir=state.workdir,
-        zhipu_client=state.zhipu_client,
-        todo_mgr=state.todo_mgr,
-        task_mgr=state.task_mgr,
-        bg_mgr=state.bg_mgr,
-        bus=state.bus,
-        team_mgr=state.team,
-        skills_loader=state.skills,
-        run_subagent=run_subagent,
-        model=state.model,
-        client=state.client,
-        transcript_dir=state.config["transcript_dir"],
-    )
-
-    _state = state
-    return state
-
-
-def _validate_config(config: Dict[str, Any]) -> None:
-    """
-    验证必需的配置值。
+    此函数创建 SessionManager 单例，用于管理所有用户会话。
 
     Args:
-        config: 配置字典
+        base_workdir: 基础工作目录（默认为当前目录）
 
-    Raises:
-        ValueError: 如果缺少必需的配置
+    Returns:
+        SessionManager 实例
     """
-    if not config.get("model_id"):
-        raise ValueError("MODEL_ID is required. Set it in .env file or environment.")
-    if not config.get("anthropic_api_key"):
-        raise ValueError("ANTHROPIC_API_KEY is required. Set it in .env file or environment.")
+    global _manager
+
+    if _manager is not None:
+        return _manager
+
+    if base_workdir is None:
+        base_workdir = Path.cwd()
+
+    _manager = SessionManager(base_workdir)
+    return _manager
 
 
-# =============================================================================
-# 向后兼容：提供全局变量访问（用于向后兼容旧代码）
-# =============================================================================
-# 注意：这些仅用于向后兼容。新代码应使用 get_state()。
+def reset():
+    """
+    重置应用状态（主要用于测试）。
 
+    清除 SessionManager 单例，允许重新初始化。
+    """
+    global _manager
+    _manager = None
+    SessionManager.reset()
+
+
+# ============================================================================
+# 便捷函数：直接操作会话
+# ============================================================================
+
+def create_session(
+    user_id: str,
+    user_config: dict,
+    session_id: Optional[str] = None,
+    **overrides
+):
+    """
+    创建新会话并初始化所有组件。
+
+    Args:
+        user_id: 用户 ID
+        user_config: 用户配置字典
+        session_id: 会话 ID（可选，不提供则自动生成）
+        **overrides: 覆盖配置的额外参数
+
+    Returns:
+        已初始化的 Session 实例
+    """
+    manager = get_manager()
+    session = manager.create_session(user_id, user_config, session_id, **overrides)
+    manager.initialize_session_components(session)
+
+    # 设置子代理处理器
+    from ..tools import registry
+    session.tool_handlers["task"] = lambda **kw: registry._handle_task(
+        kw["prompt"],
+        kw.get("agent_type", "Explore"),
+        session.config.workdir,
+        session.client,
+        session.model,
+        session.tool_handlers,
+        session
+    )
+
+    return session
+
+
+def get_session(user_id: str, session_id: str):
+    """
+    获取指定会话。
+
+    Args:
+        user_id: 用户 ID
+        session_id: 会话 ID
+
+    Returns:
+        Session 实例，如果不存在则返回 None
+    """
+    manager = get_manager()
+    return manager.get_session(user_id, session_id)
+
+
+def close_session(user_id: str, session_id: str) -> bool:
+    """
+    关闭并移除会话。
+
+    Args:
+        user_id: 用户 ID
+        session_id: 会话 ID
+
+    Returns:
+        是否成功关闭
+    """
+    manager = get_manager()
+    return manager.close_session(user_id, session_id)
+
+
+def list_user_sessions(user_id: str):
+    """
+    列出用户的所有会话。
+
+    Args:
+        user_id: 用户 ID
+
+    Returns:
+        该用户的所有活跃会话列表
+    """
+    manager = get_manager()
+    return manager.list_user_sessions(user_id)
+
+
+def list_all_sessions():
+    """
+    列出所有会话。
+
+    Returns:
+        所有活跃会话列表
+    """
+    manager = get_manager()
+    return manager.list_all_sessions()
+
+
+# ============================================================================
+# 向后兼容：旧的 API 接口（单用户模式）
+# ============================================================================
+
+# 这些全局变量仅用于向后兼容，不推荐在新代码中使用
 config = None
 logger = None
 client = None
 zhipu_client = None
-TODO = None
-TASK_MGR = None
-BG = None
-BUS = None
-TEAM = None
-SKILLS = None
-TOOLS = None
-TOOL_HANDLERS = None
-WORKDIR = None
-MODEL = None
-TOKEN_THRESHOLD = None
+todo_mgr = None
+task_mgr = None
+bg_mgr = None
+bus = None
+team = None
+skills = None
+tools = None
+tool_handlers = None
+workdir = None
+model = None
+token_threshold = None
 
 
-def _sync_globals() -> None:
-    """将状态同步到全局变量（向后兼容）。"""
+def init_legacy_session(user_id: str = "default", session_id: str = "default"):
+    """
+    初始化旧版单用户模式的会话（向后兼容）。
+
+    此函数创建一个会话并将其状态同步到全局变量。
+
+    Args:
+        user_id: 用户 ID
+        session_id: 会话 ID
+    """
     global config, logger, client, zhipu_client
-    global TODO, TASK_MGR, BG, BUS, TEAM, SKILLS
-    global TOOLS, TOOL_HANDLERS, WORKDIR, MODEL, TOKEN_THRESHOLD
+    global todo_mgr, task_mgr, bg_mgr, bus, team, skills
+    global tools, tool_handlers, workdir, model, token_threshold
 
-    if _state is None:
-        return
+    # 创建会话
+    from .core import get_config, get_user_config_dict
+    app_config = get_config()
+    session = create_session(
+        user_id,
+        user_config=get_user_config_dict(
+            model_id=app_config.get("model_id"),
+            anthropic_api_key=app_config.get("anthropic_api_key"),
+            anthropic_base_url=app_config.get("anthropic_base_url"),
+            token_threshold=app_config.get("token_threshold"),
+            poll_interval=app_config.get("poll_interval"),
+            idle_timeout=app_config.get("idle_timeout"),
+        ),
+        session_id=session_id
+    )
 
-    config = _state.config
-    logger = _state.logger
-    client = _state.client
-    zhipu_client = _state.zhipu_client
-    TODO = _state.todo_mgr
-    TASK_MGR = _state.task_mgr
-    BG = _state.bg_mgr
-    BUS = _state.bus
-    TEAM = _state.team
-    SKILLS = _state.skills
-    TOOLS = _state.tools
-    TOOL_HANDLERS = _state.tool_handlers
-    WORKDIR = _state.workdir
-    MODEL = _state.model
-    TOKEN_THRESHOLD = _state.token_threshold
+    # 同步到全局变量
+    config = session.config
+    logger = session.logger
+    client = session.client
+    zhipu_client = session.zhipu_client
+    todo_mgr = session.todo_mgr
+    task_mgr = session.task_mgr
+    bg_mgr = session.bg_mgr
+    bus = session.bus
+    team = session.team
+    skills = session.skills
+    tools = session.tools
+    tool_handlers = session.tool_handlers
+    workdir = session.config.workdir
+    model = session.model
+    token_threshold = session.token_threshold
 
-
-# 重写 initialize 以同步全局变量
-_original_initialize = initialize
-
-
-def initialize() -> AppState:  # type: ignore
-    """初始化应用并同步全局变量。"""
-    result = _original_initialize()
-    _sync_globals()
-    return result
+    return session

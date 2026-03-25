@@ -5,6 +5,7 @@
 
 提供代理主循环和系统提示词生成。
 持续调用 LLM 并执行工具，直到模型停止调用工具。
+支持多用户多会话架构。
 """
 
 import json
@@ -32,13 +33,14 @@ class Agent:
         client: Any,
         model: str,
         tools: List[Dict],
-        tool_handlers: Dict[str, callable],
+        tool_handlers: Dict[str, Any],
         todo_manager: Any,
         bg_manager: Any,
         bus: Any,
         skills_loader: Any,
         config: Dict[str, Any],
         logger: Any,
+        session: Optional[Any] = None,
     ):
         """
         初始化代理。
@@ -54,21 +56,23 @@ class Agent:
             skills_loader: 技能加载器
             config: 配置字典
             logger: 日志记录器
+            session: Session 实例（可选）
         """
         self.client = client
         self.model = model
         self.tools = tools
         self.tool_handlers = tool_handlers
         self.todo_mgr = todo_manager
-        self.bg_mgr = bg_manager
+        self.bg_manager = bg_manager
         self.bus = bus
         self.skills = skills_loader
         self.config = config
         self.logger = logger
+        self.session = session
         self._system_prompt: Optional[str] = None
 
-        # 延迟导入以避免循环依赖
-        from ..context import estimate_tokens, microcompact, auto_compact
+        # 延迟导入以避免循环依赖（使用绝对导入）
+        from planify.context import estimate_tokens, microcompact, auto_compact
         self._estimate_tokens = estimate_tokens
         self._microcompact = microcompact
         self._auto_compact = auto_compact
@@ -114,12 +118,17 @@ class Agent:
             # === s06: 压缩管道 ===
             self._microcompact(messages)
             if self._estimate_tokens(messages) > self.config["token_threshold"]:
-                messages[:] = self._auto_compact(
-                    messages, self.client, self.model, self.config["transcript_dir"]
-                )
+                transcript_dir = self.config.get("transcript_dir", ".transcripts")
+                compacted = self._auto_compact(messages, self.client, self.model, transcript_dir)
+
+                # 如果有 session，使用线程安全的替换
+                if self.session:
+                    self.session.replace_messages_in_place(compacted)
+                else:
+                    messages[:] = compacted
 
             # === s08: 后台通知 ===
-            notifs = self.bg_mgr.drain()
+            notifs = self.bg_manager.drain()
             if notifs:
                 txt = "\n".join(
                     f"[bg:{n['task_id']}] {n['status']}: {n['result']}"
@@ -217,9 +226,19 @@ class Agent:
 
             # === s06: 手动压缩 ===
             if manual_compress:
-                messages[:] = self._auto_compact(
-                    messages, self.client, self.model, self.config["transcript_dir"]
-                )
+                transcript_dir = self.config.get("transcript_dir", ".transcripts")
+                compacted = self._auto_compact(messages, self.client, self.model, transcript_dir)
+
+                # 如果有 session，使用线程安全的替换
+                if self.session:
+                    self.session.replace_messages_in_place(compacted)
+                else:
+                    messages[:] = compacted
+
+    @property
+    def has_session(self) -> bool:
+        """是否绑定了 Session"""
+        return self.session is not None
 
 
 def get_system_prompt(skills_loader: Any, config: Dict[str, Any]) -> str:
@@ -247,13 +266,14 @@ def run_agent_loop(
     client: Any,
     model: str,
     tools: List[Dict],
-    tool_handlers: Dict[str, callable],
+    tool_handlers: Dict[str, Any],
     todo_manager: Any,
     bg_manager: Any,
     bus: Any,
     skills_loader: Any,
     config: Dict[str, Any],
     logger: Any,
+    session: Optional[Any] = None,
 ) -> None:
     """
     运行代理循环（函数式接口）。
@@ -272,6 +292,7 @@ def run_agent_loop(
         skills_loader: 技能加载器
         config: 配置字典
         logger: 日志记录器
+        session: Session 实例（可选）
     """
     agent = Agent(
         client=client,
@@ -284,5 +305,6 @@ def run_agent_loop(
         skills_loader=skills_loader,
         config=config,
         logger=logger,
+        session=session,
     )
     agent.run(messages)
